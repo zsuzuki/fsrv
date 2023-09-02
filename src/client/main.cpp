@@ -18,8 +18,7 @@ namespace
 {
 using FilePath = std::filesystem::path;
 
-bool verboseMode   = false; // 詳細モード
-bool recursiveMode = false; // 再帰検索モード
+bool verboseMode = false; // 詳細モード
 
 // 相対パスの"./","../"を削る
 FilePath deleteDot(FilePath path)
@@ -251,8 +250,6 @@ int main(int argc, char **argv)
     options.add_options()("h,help", "Print usage")(
         // verbose
         "v,verbose", "verbose mode", cxxopts::value<bool>()->default_value("false"))(
-        // recursive
-        "r,recursive", "recursive mode", cxxopts::value<bool>()->default_value("false"))(
         // port
         "p,port", "port number", cxxopts::value<int>())(
         // file directory
@@ -271,8 +268,7 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    verboseMode   = result["verbose"].as<bool>();
-    recursiveMode = result["recursive"].as<bool>();
+    verboseMode = result["verbose"].as<bool>();
 
     auto url  = result["url"].as<std::string>();
     auto port = DEFAULT_PORT;
