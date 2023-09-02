@@ -56,6 +56,7 @@ struct FileInfo
     FilePath path_;
     int64_t time_;
     size_t size_;
+    bool delete_;
 };
 using FileInfoPtr = std::shared_ptr<FileInfo>;
 Trie<std::string, FileInfoPtr> fileList;
@@ -68,6 +69,15 @@ void repliesFileList(const httplib::Request &req, httplib::Response &res)
     {
         prefixDir = req.get_param_value("prefix");
     }
+    bool update = false;
+    if (req.has_param("update"))
+    {
+        auto upstr = req.get_param_value("update");
+        if (upstr == "1" || upstr == "true" || upstr == "TRUE" || upstr == "ON")
+        {
+            update = true;
+        }
+    }
 
     // ファイルリストを返す
     auto allList = fileList.searchByPrefix(prefixDir);
@@ -75,10 +85,40 @@ void repliesFileList(const httplib::Request &req, httplib::Response &res)
     int findex = 0;
     for (auto &n : allList)
     {
+        auto fname = n->path_.string();
+        auto fsize = n->size_;
+        auto ftime = n->time_;
+        bool fdel  = n->delete_;
+        if (update)
+        {
+            // 更新する場合は情報を取得
+            if (std::filesystem::exists(fname))
+            {
+                using namespace std::chrono;
+                auto lct = std::filesystem::last_write_time(fname);
+                auto epl = lct.time_since_epoch();
+                auto sec = duration_cast<seconds>(epl);
+                ftime    = sec.count();
+                fsize    = std::filesystem::file_size(fname);
+                fdel     = false;
+            }
+            else
+            {
+                // 消えた…
+                fsize = 0;
+                ftime = 0;
+                fdel  = true;
+            }
+            n->size_   = fsize;
+            n->time_   = ftime;
+            n->delete_ = fdel;
+        }
+
         nlohmann::json entry;
-        entry["Path"]     = n->path_.c_str();
-        entry["Size"]     = n->size_;
-        entry["Time"]     = n->time_;
+        entry["Path"]     = fname;
+        entry["Size"]     = fsize;
+        entry["Time"]     = ftime;
+        entry["Delete"]   = fdel;
         jsonObj[findex++] = entry;
     }
     nlohmann::json jsonTop;
@@ -184,12 +224,13 @@ bool checkDirectory(FilePath targetDir, bool dispErr = false)
             else if (entry.is_regular_file())
             {
                 using namespace std::chrono;
-                auto wtime  = entry.last_write_time().time_since_epoch();
-                auto sec    = duration_cast<seconds>(wtime);
-                auto fptr   = std::make_shared<FileInfo>();
-                fptr->path_ = entry.path();
-                fptr->time_ = sec.count();
-                fptr->size_ = entry.file_size();
+                auto wtime    = entry.last_write_time().time_since_epoch();
+                auto sec      = duration_cast<seconds>(wtime);
+                auto fptr     = std::make_shared<FileInfo>();
+                fptr->path_   = entry.path();
+                fptr->time_   = sec.count();
+                fptr->size_   = entry.file_size();
+                fptr->delete_ = false;
                 fileList.insert(fptr->path_.string(), fptr);
                 dptr->count_++;
 
@@ -217,11 +258,9 @@ int main(int argc, char **argv)
 
     options.add_options()("h,help", "Print usage")(
         // verbose
-        "v,verbose", "verbose mode",
-        cxxopts::value<bool>()->default_value("false"))(
+        "v,verbose", "verbose mode", cxxopts::value<bool>()->default_value("false"))(
         // recursive
-        "r,recursive", "recursive mode",
-        cxxopts::value<bool>()->default_value("false"))(
+        "r,recursive", "recursive mode", cxxopts::value<bool>()->default_value("false"))(
         // port
         "p,port", "port number", cxxopts::value<int>())(
         // ssl enable
@@ -230,8 +269,7 @@ int main(int argc, char **argv)
         "ssl_cert_path", "specify certificate path as argument",
         cxxopts::value<std::string>()->default_value("."))(
         // file directory
-        "dir", "target directory",
-        cxxopts::value<std::string>()->default_value("."));
+        "dir", "target directory", cxxopts::value<std::string>()->default_value("."));
 
     options.parse_positional({"dir"});
 
@@ -261,8 +299,7 @@ int main(int argc, char **argv)
         std::cout << "enable SSL server, cert path: " << certPath << std::endl;
         FilePath certName{certPath / "cert.pem"};
         FilePath keyName{certPath / "key.pem"};
-        svrptr = std::make_unique<httplib::SSLServer>(certName.c_str(),
-                                                      keyName.c_str());
+        svrptr = std::make_unique<httplib::SSLServer>(certName.c_str(), keyName.c_str());
     }
     else
     {
@@ -289,8 +326,7 @@ int main(int argc, char **argv)
 
     // マウントポイント
     std::string mountPoint = "/files/";
-    mountPoint += dname.string();
-    std::cout << "mount point: " << mountPoint << std::endl;
+    std::cout << "mount point: " << dname << std::endl;
 
     if (!svr.set_mount_point(mountPoint, targetDir.string()))
     {
