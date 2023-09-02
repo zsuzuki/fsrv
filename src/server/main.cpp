@@ -263,6 +263,8 @@ int main(int argc, char **argv)
         "r,recursive", "recursive mode", cxxopts::value<bool>()->default_value("false"))(
         // port
         "p,port", "port number", cxxopts::value<int>())(
+        // port scan
+        "a,auto", "port scan", cxxopts::value<bool>()->default_value("false"))(
         // ssl enable
         "ssl", "Enable SSL", cxxopts::value<bool>()->default_value("false"))(
         // ssl certificate path
@@ -299,7 +301,8 @@ int main(int argc, char **argv)
         std::cout << "enable SSL server, cert path: " << certPath << std::endl;
         FilePath certName{certPath / "cert.pem"};
         FilePath keyName{certPath / "key.pem"};
-        svrptr = std::make_unique<httplib::SSLServer>(certName.c_str(), keyName.c_str());
+        svrptr = std::make_unique<httplib::SSLServer>(certName.c_str(), keyName.c_str(), nullptr,
+                                                      nullptr, nullptr);
     }
     else
     {
@@ -333,14 +336,24 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    std::cout << "start server..." << std::endl;
-    auto port = DEFAULT_PORT;
-    if (result.count("port"))
+    if (result["auto"].as<bool>())
     {
-        port = result["port"].as<int>();
+        // インターフェースを自動設定
+        int port = svr.bind_to_any_port("0.0.0.0");
+        std::cout << "port number: " << port << std::endl;
+        svr.listen_after_bind();
     }
-    printVerbose("port number: ", port);
-    svr.listen("localhost", port);
+    else
+    {
+        std::cout << "start server..." << std::endl;
+        auto port = DEFAULT_PORT;
+        if (result.count("port"))
+        {
+            port = result["port"].as<int>();
+        }
+        printVerbose("port number: ", port);
+        svr.listen("localhost", port);
+    }
 
     return 0;
 }
