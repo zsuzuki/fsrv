@@ -370,7 +370,7 @@ int main(int argc, char **argv)
 
     // マウントポイント
     std::string mountPoint = "/files/";
-    mountPoint += dname;
+    mountPoint += dname.string();
     std::cout << "mount point: " << dname << std::endl;
 
     if (!svr.set_mount_point(mountPoint, targetDir.string()))
