@@ -20,6 +20,22 @@ using FilePath = std::filesystem::path;
 bool verboseMode   = false; // 詳細モード
 bool recursiveMode = false; // 再帰検索モード
 
+#if _WIN32
+// Windowsパス変換
+FilePath translateToPosix(const FilePath src)
+{
+    std::string chgStr = src.generic_string();
+    for (auto &ch : chgStr)
+    {
+        if (ch == '\\')
+        {
+            ch = '/';
+        }
+    }
+    return chgStr;
+}
+#endif
+
 // デバッグ表示
 template <class Msg> void printVerbose(Msg msg)
 {
@@ -224,10 +240,14 @@ bool checkDirectory(FilePath targetDir, bool dispErr = false)
             else if (entry.is_regular_file())
             {
                 using namespace std::chrono;
-                auto wtime    = entry.last_write_time().time_since_epoch();
-                auto sec      = duration_cast<seconds>(wtime);
-                auto fptr     = std::make_shared<FileInfo>();
-                fptr->path_   = entry.path();
+                auto wtime = entry.last_write_time().time_since_epoch();
+                auto sec   = duration_cast<seconds>(wtime);
+                auto fptr  = std::make_shared<FileInfo>();
+#if _WIN32
+                fptr->path_ = translateToPosix(entry.path());
+#else
+                fptr->path_ = entry.path();
+#endif
                 fptr->time_   = sec.count();
                 fptr->size_   = entry.file_size();
                 fptr->delete_ = false;
@@ -301,8 +321,9 @@ int main(int argc, char **argv)
         std::cout << "enable SSL server, cert path: " << certPath << std::endl;
         FilePath certName{certPath / "cert.pem"};
         FilePath keyName{certPath / "key.pem"};
-        svrptr = std::make_unique<httplib::SSLServer>(certName.c_str(), keyName.c_str(), nullptr,
-                                                      nullptr, nullptr);
+        const char *cnptr = certName.c_str();
+        const char *kyptr = keyName.c_str();
+        svrptr            = std::make_unique<httplib::SSLServer>(cnptr, kyptr);
     }
     else
     {
