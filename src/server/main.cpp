@@ -78,6 +78,7 @@ void errorHandler(const httplib::Request & /*req*/, httplib::Response &res)
 //
 struct FileInfo
 {
+    FilePath key_;
     FilePath path_;
     int64_t time_;
     size_t size_;
@@ -111,6 +112,7 @@ void repliesFileList(const httplib::Request &req, httplib::Response &res)
     for (auto &n : allList)
     {
         auto fname = n->path_.string();
+        auto fkey  = n->key_.string();
         auto fsize = n->size_;
         auto ftime = n->time_;
         bool fdel  = n->delete_;
@@ -140,7 +142,7 @@ void repliesFileList(const httplib::Request &req, httplib::Response &res)
         }
 
         nlohmann::json entry;
-        entry["Path"]     = fname;
+        entry["Path"]     = fkey;
         entry["Size"]     = fsize;
         entry["Time"]     = ftime;
         entry["Delete"]   = fdel;
@@ -200,7 +202,7 @@ void repliesDirList(const httplib::Request &req, httplib::Response &res)
 //
 // ディレクトリ走査
 //
-bool checkDirectory(FilePath targetDir, bool dispErr = false)
+bool checkDirectory(FilePath targetDir, const FilePath rootPath, bool dispErr = false)
 {
     try
     {
@@ -244,23 +246,26 @@ bool checkDirectory(FilePath targetDir, bool dispErr = false)
             if (recursiveMode && entry.is_directory())
             {
                 currentDir = dptr;
-                checkDirectory(entry.path());
+                checkDirectory(entry.path(), rootPath);
             }
             else if (entry.is_regular_file())
             {
                 using namespace std::chrono;
-                auto wtime = entry.last_write_time().time_since_epoch();
-                auto sec   = duration_cast<seconds>(wtime);
-                auto fptr  = std::make_shared<FileInfo>();
+                auto wtime   = entry.last_write_time().time_since_epoch();
+                auto sec     = duration_cast<seconds>(wtime);
+                auto fptr    = std::make_shared<FileInfo>();
+                auto keyName = entry.path().lexically_relative(rootPath);
 #if _WIN32
                 fptr->path_ = translateToPosix(entry.path());
+                fptr->key_  = translateToPosix(keyName);
 #else
                 fptr->path_ = entry.path();
+                fptr->key_  = keyName;
 #endif
                 fptr->time_   = sec.count();
                 fptr->size_   = entry.file_size();
                 fptr->delete_ = false;
-                fileList.insert(fptr->path_.string(), fptr);
+                fileList.insert(fptr->key_.string(), fptr);
                 dptr->count_++;
 
                 printVerbose("File: ", fptr->path_, "(", fptr->time_, ")");
@@ -316,7 +321,8 @@ int main(int argc, char **argv)
 
     // ファイルリスト収集
     FilePath targetDir{result["dir"].as<std::string>()};
-    if (!checkDirectory(targetDir, true))
+    auto parentPath = targetDir.parent_path();
+    if (!checkDirectory(targetDir, parentPath, true))
     {
         return 1;
     }
@@ -358,12 +364,13 @@ int main(int argc, char **argv)
     svr.Get("/dir", repliesDirList);
 
     // 絶対パスと対象ディレクトリ名
-    auto abspath = std::filesystem::canonical(targetDir);
-    auto dname   = abspath.filename();
-    std::cout << "read dir: " << dname << "(" << abspath << ")" << std::endl;
+    auto absPath = std::filesystem::canonical(targetDir);
+    auto dname   = absPath.filename();
+    std::cout << "read dir: " << dname << "(" << absPath << ")" << std::endl;
 
     // マウントポイント
     std::string mountPoint = "/files/";
+    mountPoint += dname;
     std::cout << "mount point: " << dname << std::endl;
 
     if (!svr.set_mount_point(mountPoint, targetDir.string()))
