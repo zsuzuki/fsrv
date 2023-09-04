@@ -22,12 +22,11 @@ bool recursiveMode = false; // 再帰検索モード
 
 #if _WIN32
 // wchar -> string
-std::string wcs2mbs(const FilePaFilePath &src)
+std::string wcs2mbs(const FilePath &src)
 {
-    auto wstr    = src.string();
-    auto *srcPtr = wstr.c_str();
+    auto *srcPtr = src.c_str();
     char buff[1024];
-    wcstombs(buff, srcPtr, wstr.length() * sizeof(wchar_t));
+    wcstombs(buff, srcPtr, sizeof(buff));
     return buff;
 }
 
