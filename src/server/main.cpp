@@ -21,10 +21,20 @@ bool verboseMode   = false; // 詳細モード
 bool recursiveMode = false; // 再帰検索モード
 
 #if _WIN32
+// wchar -> string
+std::string wcs2mbs(const FilePaFilePath &src)
+{
+    auto wstr    = src.string();
+    auto *srcPtr = wstr.c_str();
+    char buff[1024];
+    wcstombs(buff, srcPtr, wstr.length() * sizeof(wchar_t));
+    return buff;
+}
+
 // Windowsパス変換
 FilePath translateToPosix(const FilePath src)
 {
-    std::string chgStr = src.generic_string();
+    auto chgStr = src.string();
     for (auto &ch : chgStr)
     {
         if (ch == '\\')
@@ -319,8 +329,13 @@ int main(int argc, char **argv)
         // SSL:ルート証明書がないとブラウザからは怒られる
         FilePath certPath = result["ssl_cert_path"].as<std::string>();
         std::cout << "enable SSL server, cert path: " << certPath << std::endl;
+#if _WIN32
+        auto certName = wcs2mbs(certPath / "cert.pem");
+        auto keyName  = wcs2mbs(certPath / "key.pem");
+#else
         FilePath certName{certPath / "cert.pem"};
         FilePath keyName{certPath / "key.pem"};
+#endif
         const char *cnptr = certName.c_str();
         const char *kyptr = keyName.c_str();
         svrptr            = std::make_unique<httplib::SSLServer>(cnptr, kyptr);
