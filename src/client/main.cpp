@@ -1,16 +1,19 @@
 //
 // Copyright 2023 Suzuki Yoshinori(wave.suzuki.z@gmail.com)
 //
+#include "nlohmann/json_fwd.hpp"
 #include <cxxopts.hpp>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <httplib.h>
 #include <iostream>
+#include <leveldb/db.h>
 #include <list>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <sys/_types/_int64_t.h>
 #include <thread>
 #include <trie.h>
 
@@ -19,24 +22,6 @@ namespace
 using FilePath = std::filesystem::path;
 
 bool verboseMode = false; // 詳細モード
-
-// 相対パスの"./","../"を削る
-FilePath deleteDot(FilePath path)
-{
-    auto str = path.string();
-    for (int i = 0; i < str.length(); i++)
-    {
-        if (str[i] == '/')
-        {
-            return str.substr(i + 1);
-        }
-        if (str[i] != '.')
-        {
-            return path;
-        }
-    }
-    return "";
-}
 
 // デバッグ表示
 template <class Msg> void printVerbose(Msg msg)
@@ -53,6 +38,111 @@ template <class Msg, class... Args> void printVerbose(Msg msg, Args... args)
         std::cout << msg;
         printVerbose(args...);
     }
+}
+
+//
+// levelDB
+//
+class LevelDB
+{
+    leveldb::DB *db = nullptr;
+
+  public:
+    LevelDB() = default;
+    ~LevelDB()
+    {
+        if (db)
+        {
+            delete db;
+        }
+    }
+
+    //
+    bool open()
+    {
+        leveldb::Options options{};
+        options.create_if_missing = true;
+        auto status               = leveldb::DB::Open(options, ".ldb", &db);
+        if (!status.ok())
+        {
+            std::cerr << status.ToString() << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    //
+    bool put(std::string key, std::string value)
+    {
+        if (db == nullptr)
+        {
+            return false;
+        }
+
+        auto s = db->Put(leveldb::WriteOptions(), key, value);
+        if (!s.ok())
+        {
+            std::cerr << s.ToString() << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    //
+    bool get(std::string key, std::string &value)
+    {
+        if (db == nullptr)
+        {
+            return false;
+        }
+
+        auto s = db->Get(leveldb::ReadOptions(), key, &value);
+        if (!s.ok())
+        {
+            std::cerr << s.ToString() << std::endl;
+            return false;
+        }
+        return true;
+    }
+};
+
+//
+//
+//
+
+// ファイル名が示すディレクトリがなければ作成する
+void checkAndMakeDir(const FilePath &fname)
+{
+    auto parentPath = fname.parent_path();
+    if (!std::filesystem::exists(parentPath))
+    {
+        // ディレクトリも作る
+        printVerbose("create directory: ", parentPath, "(", fname, ")");
+        std::filesystem::create_directories(parentPath);
+    }
+}
+
+// ファイル更新チェック
+bool checkUpdateFile(LevelDB *ldb, const FilePath &fname, size_t fsize, int64_t ftime)
+{
+    std::string infoJsonStr;
+    if (ldb->get(fname.string(), infoJsonStr))
+    {
+        nlohmann::json infoJson = nlohmann::json::parse(infoJsonStr);
+        auto localSize          = infoJson["Size"].get<size_t>();
+        auto localTime          = infoJson["Time"].get<int64_t>();
+        if (localSize == fsize && localTime == ftime)
+        {
+            printVerbose("no update: ", fname);
+            return false;
+        }
+    }
+    else
+    {
+        printVerbose("not found in database: ", fname);
+    }
+
+    return true;
 }
 
 //
@@ -140,6 +230,12 @@ void syncFiles(std::string url, int port, std::string pattern)
     {
         if (res->status == 200)
         {
+            auto ldb = std::make_unique<LevelDB>();
+            if (!ldb->open())
+            {
+                return;
+            }
+
             nlohmann::json fileList = nlohmann::json::parse(res->body);
             for (auto &file : fileList["Files"].items())
             {
@@ -164,38 +260,13 @@ void syncFiles(std::string url, int port, std::string pattern)
                 else if (fileExists)
                 {
                     // ファイルが存在するなら更新されたか確認する
-                    auto localSize = std::filesystem::file_size(fname);
-                    if (localSize != fsize)
-                    {
-                        needUpdate = true;
-                        printVerbose("  -> different file size:", localSize, "/", fsize);
-                    }
-                    else
-                    {
-                        using namespace std::chrono;
-                        auto lct          = std::filesystem::last_write_time(fname);
-                        auto epl          = lct.time_since_epoch();
-                        auto sec          = duration_cast<seconds>(epl);
-                        int64_t localTime = sec.count();
-
-                        if (localTime < ftime)
-                        {
-                            needUpdate = true;
-                            printVerbose("  -> different time stamp:", localTime, "/", ftime);
-                        }
-                    }
+                    needUpdate = checkUpdateFile(ldb.get(), fname, fsize, ftime);
                 }
                 else
                 {
                     // ない
-                    needUpdate      = true;
-                    auto parentPath = fname.parent_path();
-                    if (!std::filesystem::exists(parentPath))
-                    {
-                        // ディレクトリも作る
-                        std::cout << "create directorie(s): " << parentPath << std::endl;
-                        std::filesystem::create_directories(parentPath);
-                    }
+                    needUpdate = true;
+                    checkAndMakeDir(fname);
                     printVerbose("  -> not exists(need update)");
                 }
                 //
@@ -203,7 +274,7 @@ void syncFiles(std::string url, int port, std::string pattern)
                 {
                     // ファイル更新
                     const FilePath pathPrefix{"/files"};
-                    auto downloadPath = pathPrefix / deleteDot(fname);
+                    auto downloadPath = (pathPrefix / fname).lexically_normal();
                     std::cout << "DOWNLOAD: " << downloadPath << " -> " << fname << std::endl;
                     std::ofstream outFile{fname, std::ios::binary};
                     auto r = cli.Get(
@@ -223,11 +294,17 @@ void syncFiles(std::string url, int port, std::string pattern)
                             std::cout << current << "/" << total << '\r';
                             return true;
                         });
+                    outFile.close();
                     if (r->status == 200)
                     {
                         std::cout << "Download size: " << fsize << " ===> done." << std::endl;
                     }
+                    else
+                    {
+                        std::filesystem::remove(fname);
+                    }
                 }
+                ldb->put(fname.string(), value.dump());
             }
         }
     }

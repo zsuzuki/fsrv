@@ -13,12 +13,18 @@ add_definitions(-DCPPHTTPLIB_OPENSSL_SUPPORT=1 -DDEFAULT_PORT=44528)
 project(fsrv)
 
 find_package(OpenSSL REQUIRED)
+find_package(leveldb CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 
 include_directories(include)
 include_directories(external/cpp-httplib)
 include_directories(external/json/include)
 include_directories(external/cxxopts/include)
 include_directories(${OPENSSL_INCLUDE_DIR})
+
+if (APPLE)
+link_directories(/opt/homebrew/lib)
+endif()
 
 set(srv_src
     src/server/main.cpp
@@ -32,4 +38,4 @@ add_executable(fsrv ${srv_src})
 target_link_libraries(fsrv PRIVATE ${Boost_LIBRARIES} ${OPENSSL_LIBRARIES})
 
 add_executable(fcli ${cli_src})
-target_link_libraries(fcli PRIVATE ${Boost_LIBRARIES} ${OPENSSL_LIBRARIES})
+target_link_libraries(fcli PRIVATE ${Boost_LIBRARIES} ${OPENSSL_LIBRARIES} leveldb::leveldb Threads::Threads)
